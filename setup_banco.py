@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, text
 # 1. Configuração da Conexão (igual ao seu app.py)
 db_type = os.getenv("DB_TYPE", "postgresql")
 db_user = os.getenv("DB_USER", "postgres")
-db_pass = os.getenv("DB_PASS", "COLOQUE_SUA_NOVA_SENHA_AQUI") # <--- Altere aqui!
+db_pass = os.getenv("DB_PASS", "102010gu") # <--- Altere aqui!
 db_host = os.getenv("DB_HOST", "localhost")
 db_port = os.getenv("DB_PORT", "5432")
 db_name = os.getenv("DB_NAME", "estoque_db")

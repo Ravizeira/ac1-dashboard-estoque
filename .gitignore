@@ -3,3 +3,14 @@
 __pycache__/
 *.pyc
 .streamlit/secrets.toml
+
+# Arquivos locais de anotação, logs e sqlite (não devem ir para o repositório público)
+*.db
+*.log
+*.txt
+checklist_ac1.md
+regras.md
+roteiro_video.md
+entrega_ac1.md
+gerar_pdf.py
+*.pdf
