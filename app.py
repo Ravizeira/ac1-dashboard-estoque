@@ -3,6 +3,8 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 import os
 import urllib.parse
+from datetime import datetime
+from fpdf import FPDF
 
 # Configuração da página Streamlit
 st.set_page_config(page_title="Painel de Giro de Estoque - AC1", layout="wide")
@@ -63,12 +65,85 @@ def update_stock(produto_id, quantidade_adicional):
     with engine.begin() as conn:
         conn.execute(query, {"qtd_adicional": quantidade_adicional, "id": int(produto_id)})
 
+
+def _safe_pdf_text(texto):
+    return str(texto).encode("latin-1", "replace").decode("latin-1")
+
+
+def generate_pdf_report(df_relatorio):
+    dados = df_relatorio.copy()
+    dados["giro_estoque"] = dados["quantidade_vendida_total"] / dados["quantidade_estoque_atual"].replace(0, 1)
+    dados["valor_total_estoque"] = dados["quantidade_estoque_atual"] * dados["valor_unitario"]
+
+    total_itens = len(dados)
+    total_estoque = int(dados["quantidade_estoque_atual"].sum())
+    total_vendas = int(dados["quantidade_vendida_total"].sum())
+    valor_total = float(dados["valor_total_estoque"].sum())
+    alertas = dados[dados["quantidade_estoque_atual"] < 5]
+    top_giro = dados.sort_values("giro_estoque", ascending=False).head(5)
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    pdf.set_font("Arial", "B", 15)
+    pdf.cell(0, 10, _safe_pdf_text("Relatório Gerencial de Estoque - AC2"), ln=1, align="C")
+    pdf.set_font("Arial", "", 10)
+    pdf.cell(0, 8, _safe_pdf_text(f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"), ln=1)
+    pdf.ln(2)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, _safe_pdf_text("Resumo Executivo"), ln=1)
+    pdf.set_font("Arial", "", 10)
+    pdf.cell(0, 7, _safe_pdf_text(f"Produtos analisados: {total_itens}"), ln=1)
+    pdf.cell(0, 7, _safe_pdf_text(f"Total em estoque (unidades): {total_estoque}"), ln=1)
+    pdf.cell(0, 7, _safe_pdf_text(f"Total vendido (unidades): {total_vendas}"), ln=1)
+    pdf.cell(0, 7, _safe_pdf_text(f"Valor estimado do estoque: R$ {valor_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")), ln=1)
+    pdf.cell(0, 7, _safe_pdf_text(f"Itens em alerta de reposição (<5): {len(alertas)}"), ln=1)
+    pdf.ln(2)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, _safe_pdf_text("Top 5 Produtos por Giro de Estoque"), ln=1)
+    pdf.set_font("Arial", "", 10)
+    if top_giro.empty:
+        pdf.cell(0, 7, _safe_pdf_text("Nenhum dado disponível para cálculo de giro."), ln=1)
+    else:
+        for _, item in top_giro.iterrows():
+            linha = f"- {item['nome_produto']}: giro {item['giro_estoque']:.2f}"
+            pdf.cell(0, 7, _safe_pdf_text(linha), ln=1)
+    pdf.ln(2)
+
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(0, 8, _safe_pdf_text("Produtos em Estoque Crítico"), ln=1)
+    pdf.set_font("Arial", "", 10)
+    if alertas.empty:
+        pdf.cell(0, 7, _safe_pdf_text("Nenhum produto em estoque crítico."), ln=1)
+    else:
+        for _, item in alertas.iterrows():
+            linha = (
+                f"- {item['nome_produto']} | Estoque: {int(item['quantidade_estoque_atual'])} | "
+                f"Vendido: {int(item['quantidade_vendida_total'])}"
+            )
+            pdf.cell(0, 7, _safe_pdf_text(linha), ln=1)
+
+    output = pdf.output(dest="S")
+    if isinstance(output, str):
+        return output.encode("latin-1")
+    if isinstance(output, bytearray):
+        return bytes(output)
+    return output
+
 # ==========================================
 # UI: Front-end (Dashboard e CRUD)
 # ==========================================
-st.title("📦 Painel de Giro de Estoque - AC1")
+st.title("📦 Painel de Giro de Estoque - AC1 + AC2")
 
-tab_dashboard, tab_cadastrar, tab_atualizar = st.tabs(["📊 Dashboard de BI", "➕ Novo Produto", "🔄 Atualizar Estoque"])
+tab_dashboard, tab_cadastrar, tab_atualizar, tab_relatorios = st.tabs([
+    "📊 Dashboard de BI",
+    "➕ Novo Produto",
+    "🔄 Atualizar Estoque",
+    "🧾 Relatórios PDF (AC2)"
+])
 
 try:
     df = load_data()
@@ -175,6 +250,40 @@ try:
                         st.error(f"Erro ao atualizar o estoque: {e}")
         else:
             st.warning("Não há produtos cadastrados para atualizar o estoque.")
+
+    # ABA 4: RELATÓRIO PDF (AC2)
+    with tab_relatorios:
+        st.subheader("Gerar Relatório Gerencial em PDF")
+        st.caption("Funcionalidade inédita AC2: geração de relatório analítico a partir dos dados persistidos no banco.")
+
+        if df.empty:
+            st.warning("Não há dados para gerar relatório.")
+        else:
+            incluir_apenas_criticos = st.checkbox("Gerar somente com produtos em estoque crítico (<5 unidades)")
+            df_relatorio = df[df["quantidade_estoque_atual"] < 5] if incluir_apenas_criticos else df
+
+            st.dataframe(
+                df_relatorio[["id", "nome_produto", "quantidade_estoque_atual", "quantidade_vendida_total", "valor_unitario"]]
+                .style.format({"valor_unitario": "R$ {:.2f}"}),
+                use_container_width=True
+            )
+
+            if st.button("📄 Gerar arquivo PDF"):
+                if df_relatorio.empty:
+                    st.error("Não há dados no filtro selecionado para gerar o PDF.")
+                else:
+                    try:
+                        pdf_bytes = generate_pdf_report(df_relatorio)
+                        nome_arquivo = f"relatorio_estoque_ac2_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+                        st.success("Relatório gerado com sucesso.")
+                        st.download_button(
+                            label="⬇️ Baixar Relatório PDF",
+                            data=pdf_bytes,
+                            file_name=nome_arquivo,
+                            mime="application/pdf"
+                        )
+                    except Exception as e:
+                        st.error(f"Erro ao gerar o relatório: {e}")
 
 
 

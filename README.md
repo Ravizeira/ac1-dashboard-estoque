@@ -1,8 +1,8 @@
 --------------------------------------------------------------------------------
-# Painel de Giro de Estoque - AC1 (Análise de Dados & BI)
+# Painel de Giro de Estoque - AC1 + AC2 (Análise de Dados, BI e Relatórios)
 --------------------------------------------------------------------------------
 
-Este projeto é a entrega da **Avaliação Continuada 1 (AC1)** da disciplina de Construção de Software. Trata-se de um sistema Full-Stack com foco em **Business Intelligence e Análise de Dados**, operando nas 3 camadas exigidas (Front-end, Back-end e Banco de Dados Relacional).
+Este projeto é a entrega evolutiva da **Avaliação Continuada (AC1 + AC2)** da disciplina de Construção de Software. Trata-se de um sistema Full-Stack com foco em **Business Intelligence, Análise de Dados e Relatórios Gerenciais**, operando nas 3 camadas exigidas (Front-end, Back-end e Banco de Dados Relacional).
 
 ## Arquitetura do Sistema (3 Camadas)
 * **Front-end & Back-end:** Desenvolvido em **Python 3** utilizando o framework **Streamlit** para renderização reativa de telas e dashboards dinâmicos.
@@ -21,6 +21,42 @@ O sistema foi desenhado para gerenciar e analisar produtos, vendas e a saúde do
    * **Alerta Inteligente:** Filtro automático destacando na tela produtos com estoque crítico (abaixo de 5 unidades) que necessitam de reposição imediata.
 2. **Cadastro de Novo Produto:** Inserção direta de novos itens no banco de dados via formulário.
 3. **Atualização de Estoque:** Simulação de movimentação para atualizar os cálculos dinâmicos do BI em tempo real.
+4. **AC2 - Módulo de Relatórios em PDF:** Geração de relatório gerencial com resumo executivo, top produtos por giro e alertas de estoque crítico, com download direto pelo dashboard.
+
+## Documentação da AC2 — Módulo de Relatórios em PDF
+
+### Objetivo da entrega
+Implementar uma funcionalidade inédita para a AC2, conectada ao mesmo fluxo full-stack já existente (Streamlit + SQLAlchemy + PostgreSQL), gerando valor analítico para tomada de decisão.
+
+### O que foi implementado
+1. **Nova aba no dashboard:** `🧾 Relatórios PDF (AC2)`.
+2. **Geração de relatório gerencial em PDF** com dados lidos diretamente do banco.
+3. **Filtro opcional para estoque crítico** (`quantidade_estoque_atual < 5`) antes da geração.
+4. **Download do arquivo PDF** diretamente pela interface do Streamlit.
+
+### Conteúdo do relatório gerado
+* Data/hora de geração.
+* Resumo executivo:
+  * quantidade de produtos analisados;
+  * total em estoque (unidades);
+  * total vendido (unidades);
+  * valor total estimado em estoque;
+  * total de itens em alerta.
+* Top 5 produtos por giro de estoque.
+* Lista de produtos em estoque crítico.
+
+### Arquivos alterados na AC2
+* `app.py`: lógica de geração do PDF e nova aba de relatórios.
+* `requirements.txt`: inclusão da dependência `fpdf2`.
+* `README.md`: atualização de documentação da AC2.
+* `gerar_pdf.py`: remoção da instalação dinâmica de pacote em tempo de execução.
+
+### Como demonstrar a AC2
+1. Execute: `streamlit run app.py`
+2. Acesse a aba **Relatórios PDF (AC2)**.
+3. (Opcional) Marque o filtro de estoque crítico.
+4. Clique em **Gerar arquivo PDF**.
+5. Clique em **Baixar Relatório PDF** e abra o arquivo para validar o conteúdo.
 
 ## Estrutura do Banco de Dados (`produtos_estoque`)
 | Coluna | Tipo | Descrição |
@@ -58,7 +94,7 @@ python -m venv .venv
 # Mac/Linux: source .venv/bin/activate
 
 # Instale os pacotes principais
-pip install streamlit pandas sqlalchemy psycopg2-binary
+pip install streamlit pandas sqlalchemy psycopg2-binary fpdf2
 ```
 
 ### 3. Variáveis de Ambiente e Execução
@@ -75,4 +111,3 @@ $env:DB_NAME='estoque_db'
 streamlit run app.py
 ```
 O dashboard ficará disponível em `http://localhost:8501`.
-```
