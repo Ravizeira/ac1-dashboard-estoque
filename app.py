@@ -7,7 +7,7 @@ from datetime import datetime
 from fpdf import FPDF
 
 # Configuração da página Streamlit
-st.set_page_config(page_title="Painel de Giro de Estoque - AC1", layout="wide")
+st.set_page_config(page_title="Painel de Giro de Estoque - AC1/AC2/AC3/Parte Final", layout="wide")
 
 # ==========================================
 # Configuração e Conexão com Banco de Dados
@@ -34,6 +34,46 @@ def init_connection():
 
 engine = init_connection()
 
+
+def ensure_movements_table():
+    query = text("""
+        CREATE TABLE IF NOT EXISTS movimentacoes_estoque (
+            id SERIAL PRIMARY KEY,
+            produto_id INT NOT NULL REFERENCES produtos_estoque(id),
+            tipo_movimentacao VARCHAR(10) NOT NULL CHECK (tipo_movimentacao IN ('ENTRADA', 'SAIDA')),
+            quantidade INT NOT NULL CHECK (quantidade > 0),
+            observacao VARCHAR(255),
+            data_movimentacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    with engine.begin() as conn:
+        conn.execute(query)
+
+
+ensure_movements_table()
+
+
+def ensure_replenishment_table():
+    query = text("""
+        CREATE TABLE IF NOT EXISTS reposicoes_inteligentes (
+            id SERIAL PRIMARY KEY,
+            produto_id INT NOT NULL REFERENCES produtos_estoque(id),
+            estoque_atual INT NOT NULL,
+            quantidade_vendida_total INT NOT NULL,
+            estoque_minimo_recomendado INT NOT NULL,
+            estoque_meta INT NOT NULL,
+            quantidade_sugerida INT NOT NULL,
+            prioridade VARCHAR(10) NOT NULL CHECK (prioridade IN ('ALTA', 'MEDIA', 'BAIXA')),
+            motivo VARCHAR(255),
+            data_calculo TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    with engine.begin() as conn:
+        conn.execute(query)
+
+
+ensure_replenishment_table()
+
 # ==========================================
 # Lógica de Consulta e Regras de Negócio
 # ==========================================
@@ -56,14 +96,196 @@ def add_product(nome, qtd_estoque, qtd_vendida, valor):
             "valor": valor
         })
 
-def update_stock(produto_id, quantidade_adicional):
-    query = text("""
-        UPDATE produtos_estoque 
-        SET quantidade_estoque_atual = quantidade_estoque_atual + :qtd_adicional
-        WHERE id = :id
-    """)
+
+def register_movement(produto_id, tipo_movimentacao, quantidade, observacao):
+    tipo = tipo_movimentacao.upper()
+    if tipo not in ("ENTRADA", "SAIDA"):
+        raise ValueError("Tipo de movimentação inválido.")
+
     with engine.begin() as conn:
-        conn.execute(query, {"qtd_adicional": quantidade_adicional, "id": int(produto_id)})
+        estoque_atual = conn.execute(
+            text("SELECT quantidade_estoque_atual FROM produtos_estoque WHERE id = :id"),
+            {"id": int(produto_id)}
+        ).scalar()
+
+        if estoque_atual is None:
+            raise ValueError("Produto não encontrado.")
+
+        if tipo == "SAIDA" and int(estoque_atual) < int(quantidade):
+            raise ValueError("Saída inválida: estoque insuficiente.")
+
+        if tipo == "ENTRADA":
+            conn.execute(text("""
+                UPDATE produtos_estoque
+                SET quantidade_estoque_atual = quantidade_estoque_atual + :quantidade
+                WHERE id = :id
+            """), {"quantidade": int(quantidade), "id": int(produto_id)})
+        else:
+            conn.execute(text("""
+                UPDATE produtos_estoque
+                SET quantidade_estoque_atual = quantidade_estoque_atual - :quantidade,
+                    quantidade_vendida_total = quantidade_vendida_total + :quantidade
+                WHERE id = :id
+            """), {"quantidade": int(quantidade), "id": int(produto_id)})
+
+        conn.execute(text("""
+            INSERT INTO movimentacoes_estoque (produto_id, tipo_movimentacao, quantidade, observacao)
+            VALUES (:produto_id, :tipo_movimentacao, :quantidade, :observacao)
+        """), {
+            "produto_id": int(produto_id),
+            "tipo_movimentacao": tipo,
+            "quantidade": int(quantidade),
+            "observacao": observacao.strip() if observacao else None
+        })
+
+
+def load_movements():
+    query = """
+        SELECT
+            m.id,
+            m.data_movimentacao,
+            p.nome_produto,
+            m.tipo_movimentacao,
+            m.quantidade,
+            m.observacao
+        FROM movimentacoes_estoque m
+        JOIN produtos_estoque p ON p.id = m.produto_id
+        ORDER BY m.data_movimentacao DESC, m.id DESC
+        LIMIT 200
+    """
+    return pd.read_sql(query, engine)
+
+
+def build_replenishment_plan(df_base):
+    if df_base.empty:
+        return pd.DataFrame()
+
+    dados = df_base.copy()
+    dados["estoque_minimo_recomendado"] = dados["quantidade_vendida_total"].apply(
+        lambda qtd_vendida: max(5, int(round(float(qtd_vendida) * 0.10)))
+    )
+    dados["estoque_meta"] = dados["quantidade_vendida_total"].apply(
+        lambda qtd_vendida: max(10, int(round(float(qtd_vendida) * 0.30)))
+    )
+    dados["quantidade_sugerida"] = (
+        dados["estoque_meta"] - dados["quantidade_estoque_atual"]
+    ).clip(lower=0).astype(int)
+
+    def _classificar_prioridade(row):
+        if row["quantidade_estoque_atual"] <= row["estoque_minimo_recomendado"]:
+            return "ALTA"
+        if row["quantidade_estoque_atual"] < row["estoque_meta"]:
+            return "MEDIA"
+        return "BAIXA"
+
+    dados["prioridade"] = dados.apply(_classificar_prioridade, axis=1)
+    dados["motivo"] = dados.apply(
+        lambda row: (
+            f"Meta de reposição: {int(row['estoque_meta'])} unidades "
+            f"(mínimo recomendado: {int(row['estoque_minimo_recomendado'])})."
+        ),
+        axis=1,
+    )
+    dados = dados[dados["quantidade_sugerida"] > 0].copy()
+    if dados.empty:
+        return dados
+
+    prioridade_ordem = {"ALTA": 0, "MEDIA": 1, "BAIXA": 2}
+    dados["ordem_prioridade"] = dados["prioridade"].map(prioridade_ordem)
+
+    return dados[
+        [
+            "id",
+            "nome_produto",
+            "quantidade_estoque_atual",
+            "quantidade_vendida_total",
+            "estoque_minimo_recomendado",
+            "estoque_meta",
+            "quantidade_sugerida",
+            "prioridade",
+            "motivo",
+            "ordem_prioridade",
+        ]
+    ].sort_values(
+        by=["ordem_prioridade", "quantidade_sugerida", "nome_produto"],
+        ascending=[True, False, True],
+    ).drop(columns=["ordem_prioridade"])
+
+
+def save_replenishment_plan(df_plan):
+    if df_plan.empty:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM reposicoes_inteligentes"))
+        return
+
+    data_calculo = datetime.now()
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM reposicoes_inteligentes"))
+        for _, row in df_plan.iterrows():
+            conn.execute(
+                text("""
+                    INSERT INTO reposicoes_inteligentes (
+                        produto_id,
+                        estoque_atual,
+                        quantidade_vendida_total,
+                        estoque_minimo_recomendado,
+                        estoque_meta,
+                        quantidade_sugerida,
+                        prioridade,
+                        motivo,
+                        data_calculo
+                    )
+                    VALUES (
+                        :produto_id,
+                        :estoque_atual,
+                        :quantidade_vendida_total,
+                        :estoque_minimo_recomendado,
+                        :estoque_meta,
+                        :quantidade_sugerida,
+                        :prioridade,
+                        :motivo,
+                        :data_calculo
+                    )
+                """),
+                {
+                    "produto_id": int(row["id"]),
+                    "estoque_atual": int(row["quantidade_estoque_atual"]),
+                    "quantidade_vendida_total": int(row["quantidade_vendida_total"]),
+                    "estoque_minimo_recomendado": int(row["estoque_minimo_recomendado"]),
+                    "estoque_meta": int(row["estoque_meta"]),
+                    "quantidade_sugerida": int(row["quantidade_sugerida"]),
+                    "prioridade": row["prioridade"],
+                    "motivo": row["motivo"],
+                    "data_calculo": data_calculo,
+                },
+            )
+
+
+def load_replenishment_plan():
+    query = """
+        SELECT
+            r.id,
+            r.data_calculo,
+            p.nome_produto,
+            r.estoque_atual,
+            r.quantidade_vendida_total,
+            r.estoque_minimo_recomendado,
+            r.estoque_meta,
+            r.quantidade_sugerida,
+            r.prioridade,
+            r.motivo
+        FROM reposicoes_inteligentes r
+        JOIN produtos_estoque p ON p.id = r.produto_id
+        ORDER BY
+            CASE r.prioridade
+                WHEN 'ALTA' THEN 1
+                WHEN 'MEDIA' THEN 2
+                ELSE 3
+            END,
+            r.quantidade_sugerida DESC,
+            r.id DESC
+    """
+    return pd.read_sql(query, engine)
 
 
 def _safe_pdf_text(texto):
@@ -136,13 +358,14 @@ def generate_pdf_report(df_relatorio):
 # ==========================================
 # UI: Front-end (Dashboard e CRUD)
 # ==========================================
-st.title("📦 Painel de Giro de Estoque - AC1 + AC2")
+st.title("📦 Painel de Giro de Estoque")
 
-tab_dashboard, tab_cadastrar, tab_atualizar, tab_relatorios = st.tabs([
+tab_dashboard, tab_cadastrar, tab_atualizar, tab_relatorios, tab_reposicao = st.tabs([
     "📊 Dashboard de BI",
     "➕ Novo Produto",
-    "🔄 Atualizar Estoque",
-    "🧾 Relatórios PDF (AC2)"
+    "🔄 Movimentações (AC3)",
+    "🧾 Relatórios PDF (AC2)",
+    "📦 Reposição Inteligente"
 ])
 
 try:
@@ -227,29 +450,45 @@ try:
                     except Exception as e:
                         st.error(f"Erro ao cadastrar: {e}")
 
-    # ABA 3: ATUALIZAR ESTOQUE
+    # ABA 3: MOVIMENTAÇÕES COM HISTÓRICO (AC3)
     with tab_atualizar:
-        st.subheader("Dar Entrada no Estoque")
+        st.subheader("Registrar Entrada / Saída de Estoque")
         if not df.empty:
-            with st.form("form_att_estoque"):
-                # Cria um dicionário mapeando "Nome do Produto" para "ID"
+            with st.form("form_movimentacao_estoque"):
                 opcoes_produtos = dict(zip(df['nome_produto'], df['id']))
                 produto_selecionado = st.selectbox("Selecione o Produto", options=list(opcoes_produtos.keys()))
-                
-                qtd_entrada = st.number_input("Quantidade a Adicionar", min_value=1, step=1, value=1)
-                
-                submit_entrada = st.form_submit_button("📦 Adicionar ao Estoque")
-                
-                if submit_entrada:
+
+                tipo_movimentacao = st.selectbox("Tipo de Movimentação", options=["ENTRADA", "SAIDA"])
+                quantidade_movimentada = st.number_input("Quantidade", min_value=1, step=1, value=1)
+                observacao_movimentacao = st.text_input("Observação (Opcional)", max_chars=255)
+
+                submit_movimentacao = st.form_submit_button("💾 Registrar Movimentação")
+
+                if submit_movimentacao:
                     id_alvo = opcoes_produtos[produto_selecionado]
                     try:
-                        update_stock(id_alvo, qtd_entrada)
-                        st.success(f"Foram adicionadas {qtd_entrada} unidades ao estoque de '{produto_selecionado}'.")
-                        st.info("Acesse a aba 'Dashboard de BI' e clique em 'Atualizar Dados' para ver as mudanças.")
+                        register_movement(id_alvo, tipo_movimentacao, quantidade_movimentada, observacao_movimentacao)
+                        st.success(
+                            f"Movimentação registrada: {tipo_movimentacao} de {quantidade_movimentada} unidade(s) para '{produto_selecionado}'."
+                        )
+                        st.info("Acesse o Dashboard e clique em 'Atualizar Dados' para refletir os novos saldos.")
+                    except ValueError as e:
+                        st.error(str(e))
                     except Exception as e:
-                        st.error(f"Erro ao atualizar o estoque: {e}")
+                        st.error(f"Erro ao registrar movimentação: {e}")
+
+            st.divider()
+            st.subheader("📜 Histórico de Movimentações")
+            try:
+                historico = load_movements()
+                if historico.empty:
+                    st.info("Nenhuma movimentação registrada até o momento.")
+                else:
+                    st.dataframe(historico, use_container_width=True)
+            except Exception as e:
+                st.error(f"Erro ao carregar histórico: {e}")
         else:
-            st.warning("Não há produtos cadastrados para atualizar o estoque.")
+            st.warning("Não há produtos cadastrados para registrar movimentações.")
 
     # ABA 4: RELATÓRIO PDF (AC2)
     with tab_relatorios:
@@ -284,6 +523,73 @@ try:
                         )
                     except Exception as e:
                         st.error(f"Erro ao gerar o relatório: {e}")
+
+    # ABA 5: REPOSIÇÃO INTELIGENTE (PARTE FINAL)
+    with tab_reposicao:
+        st.subheader("Planejamento de Reposição Inteligente")
+        st.caption("Funcionalidade nova da parte final: calcula sugestões de compra e salva o plano no banco.")
+        st.info(
+            "Regra adotada: estoque mínimo recomendado = maior entre 5 unidades e 10% das vendas acumuladas; "
+            "estoque meta = maior entre 10 unidades e 30% das vendas acumuladas."
+        )
+
+        if df.empty:
+            st.warning("Não há dados para gerar o plano de reposição.")
+        else:
+            if st.button("⚙️ Gerar Plano de Reposição"):
+                try:
+                    plano = build_replenishment_plan(df)
+                    save_replenishment_plan(plano)
+                    if plano.empty:
+                        st.success("Nenhum produto precisa de reposição com os parâmetros atuais.")
+                    else:
+                        st.success(f"Plano gerado e salvo no banco para {len(plano)} produto(s).")
+                except Exception as e:
+                    st.error(f"Erro ao gerar o plano de reposição: {e}")
+
+            try:
+                plano_salvo = load_replenishment_plan()
+                if plano_salvo.empty:
+                    st.info("Clique em 'Gerar Plano de Reposição' para criar a primeira recomendação.")
+                else:
+                    total_produtos = len(plano_salvo)
+                    total_unidades = int(plano_salvo["quantidade_sugerida"].sum())
+                    alertas_altos = int((plano_salvo["prioridade"] == "ALTA").sum())
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Produtos com sugestão", total_produtos)
+                    with col2:
+                        st.metric("Unidades sugeridas", total_unidades)
+                    with col3:
+                        st.metric("Prioridade alta", alertas_altos)
+
+                    st.divider()
+                    st.subheader("📊 Sugestão de Compra por Produto")
+                    st.bar_chart(
+                        plano_salvo.set_index("nome_produto")[["quantidade_sugerida"]]
+                    )
+
+                    st.divider()
+                    st.subheader("📋 Plano de Reposição Salvo")
+                    plano_exibicao = plano_salvo.copy()
+                    plano_exibicao["data_calculo"] = pd.to_datetime(plano_exibicao["data_calculo"]).dt.strftime("%d/%m/%Y %H:%M:%S")
+                    st.dataframe(
+                        plano_exibicao[[
+                            "data_calculo",
+                            "nome_produto",
+                            "estoque_atual",
+                            "quantidade_vendida_total",
+                            "estoque_minimo_recomendado",
+                            "estoque_meta",
+                            "quantidade_sugerida",
+                            "prioridade",
+                            "motivo"
+                        ]],
+                        use_container_width=True
+                    )
+            except Exception as e:
+                st.error(f"Erro ao carregar o plano de reposição: {e}")
 
 
 

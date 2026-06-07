@@ -35,8 +35,32 @@ def main():
                 data_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             '''))
+            conn.execute(text('''
+            CREATE TABLE IF NOT EXISTS movimentacoes_estoque (
+                id SERIAL PRIMARY KEY,
+                produto_id INT NOT NULL REFERENCES produtos_estoque(id),
+                tipo_movimentacao VARCHAR(10) NOT NULL CHECK (tipo_movimentacao IN ('ENTRADA', 'SAIDA')),
+                quantidade INT NOT NULL CHECK (quantidade > 0),
+                observacao VARCHAR(255),
+                data_movimentacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            '''))
+            conn.execute(text('''
+            CREATE TABLE IF NOT EXISTS reposicoes_inteligentes (
+                id SERIAL PRIMARY KEY,
+                produto_id INT NOT NULL REFERENCES produtos_estoque(id),
+                estoque_atual INT NOT NULL,
+                quantidade_vendida_total INT NOT NULL,
+                estoque_minimo_recomendado INT NOT NULL,
+                estoque_meta INT NOT NULL,
+                quantidade_sugerida INT NOT NULL,
+                prioridade VARCHAR(10) NOT NULL CHECK (prioridade IN ('ALTA', 'MEDIA', 'BAIXA')),
+                motivo VARCHAR(255),
+                data_calculo TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            '''))
             conn.commit()
-            print(">> Tabela 'produtos_estoque' criada (ou ja existente).")
+            print(">> Tabelas 'produtos_estoque', 'movimentacoes_estoque' e 'reposicoes_inteligentes' criadas (ou ja existentes).")
             
             # 3. Popular Dados (Só inserimos se não existir nada antes, evitando duplicados em execução dupla)
             res = conn.execute(text('SELECT COUNT(*) FROM produtos_estoque')).scalar()

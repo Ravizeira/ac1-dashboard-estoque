@@ -11,6 +11,28 @@ CREATE TABLE produtos_estoque (
     data_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE movimentacoes_estoque (
+    id SERIAL PRIMARY KEY,
+    produto_id INT NOT NULL REFERENCES produtos_estoque(id),
+    tipo_movimentacao VARCHAR(10) NOT NULL CHECK (tipo_movimentacao IN ('ENTRADA', 'SAIDA')),
+    quantidade INT NOT NULL CHECK (quantidade > 0),
+    observacao VARCHAR(255),
+    data_movimentacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE reposicoes_inteligentes (
+    id SERIAL PRIMARY KEY,
+    produto_id INT NOT NULL REFERENCES produtos_estoque(id),
+    estoque_atual INT NOT NULL,
+    quantidade_vendida_total INT NOT NULL,
+    estoque_minimo_recomendado INT NOT NULL,
+    estoque_meta INT NOT NULL,
+    quantidade_sugerida INT NOT NULL,
+    prioridade VARCHAR(10) NOT NULL CHECK (prioridade IN ('ALTA', 'MEDIA', 'BAIXA')),
+    motivo VARCHAR(255),
+    data_calculo TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Inserindo dados fictícios com variações de giro e estoque para a loja de Pudins
 INSERT INTO produtos_estoque (nome_produto, quantidade_estoque_atual, quantidade_vendida_total, valor_unitario, data_atualizacao) VALUES
 ('Pudim Tradicional', 20, 150, 15.00, CURRENT_TIMESTAMP),      -- Giro alto (150/20 = 7.5)
