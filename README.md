@@ -120,12 +120,6 @@ Implementar uma funcionalidade inédita para a parte final do projeto, conectada
 3. Clique em **Gerar Plano de Reposição**.
 4. Mostre as métricas, o gráfico e a tabela com o plano salvo no banco.
 
-### Artefatos da entrega final
-* `modelo_dados_logico.png` / `modelo_dados_logico.svg`: modelo de dados lógico pronto para inserir no PDF.
-* `roteiro_video_parte_final.md`: roteiro da apresentação final.
-* `checklist_teste_manual_ac3_parte_final.md`: checklist manual de validação.
-* `parte_final.md`: instruções de referência da etapa final.
-
 ## Estrutura do Banco de Dados
 
 ### Tabela `produtos_estoque`
@@ -160,6 +154,8 @@ Implementar uma funcionalidade inédita para a parte final do projeto, conectada
 | `prioridade` | VARCHAR(10) | Classificação (`ALTA`, `MEDIA`, `BAIXA`) |
 | `motivo` | VARCHAR(255) | Justificativa da sugestão |
 | `data_calculo` | TIMESTAMP | Data/hora do cálculo |
+![[modelo_dados_logico.png]]
+
 
 ## Como executar este projeto localmente
 
